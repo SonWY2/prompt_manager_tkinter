@@ -339,6 +339,7 @@ class PromptManagerApp(tk.Tk):
         self.current_task: Optional[Task] = None
         self.current_version: Optional[Version] = None
         self.autosave_timer: Optional[str] = None
+        self.is_dirty: bool = False  # Track unsaved changes
 
         # Setup UI
         self.setup_ui()
@@ -525,6 +526,16 @@ class PromptManagerApp(tk.Tk):
 
         paned_window.add(user_frame, minsize=100)
 
+        # Save button frame
+        save_frame = ttk.Frame(edit_tab)
+        save_frame.pack(fill="x", padx=5, pady=5)
+        self.save_button = ttk.Button(
+            save_frame,
+            text="💾 Save",
+            command=self.save_current_prompt
+        )
+        self.save_button.pack(side="right", padx=5)
+
     def setup_variables_tab(self):
         """Create variables tab."""
         var_tab = ttk.Frame(self.notebook)
@@ -694,6 +705,10 @@ class PromptManagerApp(tk.Tk):
         if not selection:
             return
 
+        # Check for unsaved changes before switching
+        if not self.check_unsaved_changes():
+            return
+
         idx = selection[0]
         if idx < len(self.manager.tasks):
             self.current_task = self.manager.tasks[idx]
@@ -709,6 +724,7 @@ class PromptManagerApp(tk.Tk):
 
     def on_text_change(self, text_widget):
         """Handle text change - autosave and highlight."""
+        self.is_dirty = True  # Mark as having unsaved changes
         self.schedule_autosave()
         self.highlight_placeholders(text_widget)
 
@@ -760,12 +776,63 @@ class PromptManagerApp(tk.Tk):
             self.current_task.modified_at = datetime.now().isoformat()
 
             self.manager.save_tasks()
+            self.is_dirty = False  # Reset dirty state after save
             self.save_status_label.config(text="Saved")
 
             # Update variables
             self.refresh_variables()
         except Exception as e:
             self.save_status_label.config(text=f"Error: {str(e)}")
+
+    def save_current_prompt(self):
+        """Explicitly save current prompt content."""
+        if not self.current_task or not self.current_version:
+            return
+
+        try:
+            self.current_version.description = self.desc_entry.get()
+            self.current_version.system_prompt = self.system_text.get("1.0", tk.END).strip()
+            self.current_version.user_prompt = self.user_text.get("1.0", tk.END).strip()
+            self.current_task.modified_at = datetime.now().isoformat()
+
+            self.manager.save_tasks()
+            self.is_dirty = False
+            self.save_status_label.config(text="Saved")
+
+            # Cancel pending autosave if any
+            if self.autosave_timer:
+                self.after_cancel(self.autosave_timer)
+                self.autosave_timer = None
+
+            # Update variables
+            self.refresh_variables()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save: {str(e)}")
+
+    def check_unsaved_changes(self) -> bool:
+        """Check for unsaved changes and prompt user.
+        
+        Returns:
+            True if safe to proceed (no changes or user chose to proceed)
+            False if user cancelled
+        """
+        if not self.is_dirty:
+            return True
+
+        result = messagebox.askyesnocancel(
+            "Unsaved Changes",
+            "You have unsaved changes. Do you want to save before continuing?",
+            icon="warning"
+        )
+
+        if result is None:  # Cancel
+            return False
+        elif result:  # Yes - save
+            self.save_current_prompt()
+            return True
+        else:  # No - discard
+            self.is_dirty = False
+            return True
 
     # ========================================================================
     # Task Management
@@ -864,6 +931,10 @@ class PromptManagerApp(tk.Tk):
             messagebox.showwarning("Warning", "No task selected")
             return
 
+        # Save current content before creating new version
+        if self.is_dirty:
+            self.save_current_prompt()
+
         description = simpledialog.askstring(
             "New Version",
             "Enter version description (optional):"
@@ -882,6 +953,11 @@ class PromptManagerApp(tk.Tk):
 
     def load_version(self, version: Version):
         """Load a version into the editor."""
+        # Check for unsaved changes before switching (skip if same version)
+        if self.current_version != version:
+            if not self.check_unsaved_changes():
+                return
+
         self.current_version = version
 
         # Load content
@@ -893,6 +969,9 @@ class PromptManagerApp(tk.Tk):
 
         self.user_text.delete("1.0", tk.END)
         self.user_text.insert("1.0", version.user_prompt)
+
+        # Reset dirty state after loading
+        self.is_dirty = False
 
         # Apply highlighting to loaded content
         self.highlight_placeholders(self.system_text)
@@ -1017,12 +1096,16 @@ class PromptManagerApp(tk.Tk):
             return
 
         try:
+            # Use current editor text for real-time preview (not saved version)
+            system_template = self.system_text.get("1.0", tk.END).strip()
+            user_template = self.user_text.get("1.0", tk.END).strip()
+
             system_prompt = self.manager.render_prompt(
-                self.current_version.system_prompt,
+                system_template,
                 self.current_task.variables
             )
             user_prompt = self.manager.render_prompt(
-                self.current_version.user_prompt,
+                user_template,
                 self.current_task.variables
             )
 
@@ -1053,6 +1136,13 @@ class PromptManagerApp(tk.Tk):
             )
             return
 
+        # Save current content before execution to ensure latest content is used
+        self.save_current_prompt()
+
+        # Get current editor text (use saved version after save_current_prompt)
+        system_template = self.current_version.system_prompt
+        user_template = self.current_version.user_prompt
+
         # Update UI state
         self.execute_button.config(state="disabled", text="Running...")
         self.status_label.config(text="Executing...")
@@ -1062,11 +1152,11 @@ class PromptManagerApp(tk.Tk):
             try:
                 # Render prompts
                 system_prompt = self.manager.render_prompt(
-                    self.current_version.system_prompt,
+                    system_template,
                     self.current_task.variables
                 )
                 user_prompt = self.manager.render_prompt(
-                    self.current_version.user_prompt,
+                    user_template,
                     self.current_task.variables
                 )
 
@@ -1208,13 +1298,19 @@ Response:
         endpoint_listbox = tk.Listbox(endpoint_frame)
         endpoint_listbox.pack(fill="both", expand=True)
 
-        for endpoint in self.manager.endpoints:
-            status = "[ACTIVE]" if endpoint.active else ""
-            endpoint_listbox.insert(tk.END, f"{status} {endpoint.name} - {endpoint.model}")
+        def refresh_endpoint_list():
+            """Refresh the endpoint listbox."""
+            endpoint_listbox.delete(0, tk.END)
+            for ep in self.manager.endpoints:
+                status = "[ACTIVE]" if ep.active else ""
+                endpoint_listbox.insert(tk.END, f"{status} {ep.name} - {ep.model}")
+
+        # Initial population
+        refresh_endpoint_list()
 
         # Add endpoint button
         def add_endpoint():
-            AddEndpointDialog(dialog, self)
+            AddEndpointDialog(dialog, self, refresh_endpoint_list)
 
         ttk.Button(dialog, text="Add Endpoint", command=add_endpoint).pack(pady=5)
 
@@ -1261,9 +1357,10 @@ Response:
 class AddEndpointDialog(tk.Toplevel):
     """Dialog for adding an endpoint."""
 
-    def __init__(self, parent, app: PromptManagerApp):
+    def __init__(self, parent, app: PromptManagerApp, refresh_callback=None):
         super().__init__(parent)
         self.app = app
+        self.refresh_callback = refresh_callback
         self.title("Add Endpoint")
         self.geometry("500x300")
         self.transient(parent)
@@ -1322,6 +1419,10 @@ class AddEndpointDialog(tk.Toplevel):
             self.app.manager.endpoints.append(endpoint)
             self.app.manager.save_config()
             self.app.update_model_label()
+
+            # Refresh the endpoint list in parent dialog
+            if self.refresh_callback:
+                self.refresh_callback()
 
             messagebox.showinfo("Success", "Endpoint added successfully")
             self.destroy()
