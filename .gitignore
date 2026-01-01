@@ -1,0 +1,15 @@
+PromptManager.spec
+build/PromptManager/Analysis-00.toc
+build/PromptManager/base_library.zip
+build/PromptManager/EXE-00.toc
+build/PromptManager/PKG-00.toc
+build/PromptManager/PromptManager.pkg
+build/PromptManager/PYZ-00.pyz
+build/PromptManager/PYZ-00.toc
+build/PromptManager/warn-PromptManager.txt
+build/PromptManager/xref-PromptManager.html
+build/PromptManager/localpycs/pyimod01_archive.pyc
+build/PromptManager/localpycs/pyimod02_importers.pyc
+build/PromptManager/localpycs/pyimod03_ctypes.pyc
+build/PromptManager/localpycs/pyimod04_pywin32.pyc
+build/PromptManager/localpycs/struct.pyc
